@@ -1,0 +1,1 @@
+参考 [股票因子挖掘神经网络构建](https://blog.csdn.net/qq_45137571/article/details/118532260) 构建网络结构；
