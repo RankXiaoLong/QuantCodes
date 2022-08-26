@@ -19,17 +19,18 @@ import torch.nn as nn
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 from matplotlib import pyplot as plt
-
+import os
 
 # inception1:convolution:10,pooling:3
 class Inception1(nn.Module):
     # 该部分主要提供窗口为10的卷积，以及尺寸为3的池化
     # 输入为9*30，输出为513*1
     # 我们不需要激活函数，因为我们希望我们的特征提取层有和wq101因子类似的构造逻辑
-    def __init__(self, num, num_rev):
+    def __init__(self, num, num_rev, stride):
         super(Inception1, self).__init__()
         self.num = num
         self.num_rev = num_rev
+        self.stride = stride
         self.bc1 = nn.BatchNorm2d(1, eps=1e-5, affine=True)
         self.bc2 = nn.BatchNorm2d(1, eps=1e-5, affine=True)
         self.bc3 = nn.BatchNorm2d(1, eps=1e-5, affine=True)
@@ -47,31 +48,34 @@ class Inception1(nn.Module):
         self.avg_pool = nn.AvgPool2d(kernel_size=(1, 3), stride=(1, 3))
         self.min_pool = nn.MaxPool2d(kernel_size=(1, 3), stride=(1, 3))  # 实际上没有最小池化
 
+        self.residual = nn.Conv2d(1, 18, kernel_size=(1, 1), stride=(1, 10))
+
     def forward(self, data1):  # B*1*9*30
 
         data1 = data1.detach().numpy()
         num = self.num
         num_rev = self.num_rev
-        conv1 = self.ts_cov4d(data1, num, num_rev, 10).to(torch.float)
-        conv2 = self.ts_max(data1, 10).to(torch.float)
-        conv3 = self.ts_min(data1, 10).to(torch.float)
-        conv4 = self.ts_corr4d(data1, num, num_rev, 10).to(torch.float)
-        conv6 = self.ts_decaylinear(data1, 10).to(torch.float)
-        conv7 = self.ts_std(data1, 10).to(torch.float)
-        conv8 = self.ts_mean(data1, 10).to(torch.float)
-        conv9 = self.ts_zcore(data1, 10).to(torch.float)
-        conv10 = self.ts_mul(data1, num, num_rev, 10).to(torch.float)
+        conv1 = self.ts_cov4d(data1, num, num_rev, self.stride).to(torch.float)
+        # conv2 = self.ts_max(data1, self.stride).to(torch.float)
+        # conv3 = self.ts_min(data1, self.stride).to(torch.float)
+        conv4 = self.ts_corr4d(data1, num, num_rev, self.stride).to(torch.float)
+        conv6 = self.ts_decaylinear(data1, self.stride).to(torch.float)
+        conv7 = self.ts_std(data1, self.stride).to(torch.float)
+        conv8 = self.ts_mean(data1, self.stride).to(torch.float)
+        conv9 = self.ts_zcore(data1, self.stride).to(torch.float)
+        conv10 = self.ts_mul(data1, num, num_rev, self.stride).to(torch.float)
 
         batch1 = self.bc1(conv1)
-        batch2 = self.bc2(conv2)
-        batch3 = self.bc3(conv3)
+        # batch2 = self.bc2(conv2)
+        # batch3 = self.bc3(conv3)
         batch4 = self.bc4(conv4)
         batch6 = self.bc6(conv6)
         batch7 = self.bc7(conv7)
         batch8 = self.bc8(conv8)
         batch9 = self.bc9(conv9)
         batch10 = self.bc10(conv10)
-        feature1 = torch.cat([batch1, batch2, batch3, batch4, batch6, batch7, batch8, batch9, batch10], axis=2)
+        # feature1 = torch.cat([batch1, batch2, batch3, batch4, batch6, batch7, batch8, batch9, batch10], axis=2)
+        feature1 = torch.cat([batch1, batch4, batch6, batch7, batch8, batch9, batch10], axis=2) # batch2, batch3,
         # 171*3
         maxpool = self.max_pool(feature1)
         maxpool = self.bc_pool1(maxpool)
@@ -82,13 +86,12 @@ class Inception1(nn.Module):
 
         pool_cat = torch.cat([maxpool, avgpool, minpool], axis=2)
         pool_cat = pool_cat.flatten(start_dim=1)  # N*513
-
+        X = self.residual(torch.tensor(data1, dtype=torch.float32, requires_grad=True)).flatten(start_dim=1)
+        # pool_cat += X + 0.01
         return pool_cat
 
     def ts_zcore(self, Matrix, stride):
-        W = Matrix.shape[3]
-        H = Matrix.shape[2]
-        new_H = H
+        W, H = Matrix.shape[3], Matrix.shape[2]
         if W % stride == 0:
             Index_list = list(np.arange(0, W + stride, stride))
         else:
@@ -96,18 +99,15 @@ class Inception1(nn.Module):
             Index_list = list(np.arange(0, W + stride - mod, stride)) + [W]
         l = []
         for i in range(len(Index_list) - 1):
-            start = Index_list[i]
-            end = Index_list[i + 1]
+            start, end = Index_list[i], Index_list[i + 1]
             data = Matrix[:, :, :, start:end]
-            mean = data.mean(axis=3, keepdims=True)
-            std = data.std(axis=3, keepdims=True) + 0.1
+            mean, std = data.mean(axis=3, keepdims=True), data.std(axis=3, keepdims=True) + 0.01
             l.append(mean / std)
-        zscore = np.squeeze(np.array(l)).transpose(1, 2, 0).reshape(-1, 1, new_H, len(Index_list) - 1)
+        zscore = np.squeeze(np.array(l)).transpose(1, 2, 0).reshape(-1, 1, H, len(Index_list) - 1)
         return torch.from_numpy(zscore)
 
     def ts_cov4d(self, Matrix, num, num_rev, stride):
-        W = Matrix.shape[3]
-        H = Matrix.shape[2]
+        W, H = Matrix.shape[3], Matrix.shape[2]
         new_H = len(num)
         if W % stride == 0:
             Index_list = list(np.arange(0, W + stride, stride))
@@ -116,22 +116,18 @@ class Inception1(nn.Module):
             Index_list = list(np.arange(0, W + stride - mod, stride)) + [W]
         l = []  # 存放长度为num的协方差
         for i in range(len(Index_list) - 1):
-            start_index = Index_list[i]
-            end_index = Index_list[i + 1]
-            data1 = Matrix[:, :, num, start_index:end_index]  # N*C*len(num)*2*step
-            data2 = Matrix[:, :, num_rev, start_index:end_index]
-            mean1 = data1.mean(axis=4, keepdims=True)
-            mean2 = data2.mean(axis=4, keepdims=True)
-            spread1 = data1 - mean1
-            spread2 = data2 - mean2
+            start_index, end_index = Index_list[i], Index_list[i + 1]
+            # for data1: N*C*len(num)*2*step
+            data1, data2 = Matrix[:, :, num, start_index:end_index], Matrix[:, :, num_rev, start_index:end_index]
+            mean1, mean2 = data1.mean(axis=4, keepdims=True), data2.mean(axis=4, keepdims=True)
+            spread1, spread2 = data1 - mean1, data2 - mean2
             cov = ((spread1 * spread2).sum(axis=4, keepdims=True) / (data1.shape[4] - 1)).mean(axis=3, keepdims=True)
             l.append(cov)  # len(num) * N * 2
         cov = np.squeeze(np.array(l)).transpose(1, 2, 0).reshape(-1, 1, new_H, len(Index_list) - 1)
         return torch.from_numpy(cov)
 
     def ts_corr4d(self, Matrix, num, num_rev, stride):
-        W = Matrix.shape[3]
-        H = Matrix.shape[2]
+        W, H = Matrix.shape[3], Matrix.shape[2]
         new_H = len(num)
         if W % stride == 0:
             Index_list = list(np.arange(0, W + stride, stride))
@@ -140,23 +136,17 @@ class Inception1(nn.Module):
             Index_list = list(np.arange(0, W + stride - mod, stride)) + [W]
         l = []  # 存放长度为num的相关系数
         for i in range(len(Index_list) - 1):
-            start = Index_list[i]
-            end = Index_list[i + 1]
-            data1 = Matrix[:, :, num, start:end]
-            data2 = Matrix[:, :, num_rev, start:end]
-            std1 = data1.std(axis=4, keepdims=True)
-            std2 = data2.std(axis=4, keepdims=True)
-            std = (std1 * std2).mean(axis=3, keepdims=True)
-            l.append(std)
-        std = np.squeeze(np.array(l)).transpose(1, 2, 0).reshape(-1, 1, new_H, len(Index_list) - 1) + 0.1
+            start, end = Index_list[i], Index_list[i + 1]
+            data1, data2 = Matrix[:, :, num, start:end], Matrix[:, :, num_rev, start:end]
+            std1, std2 = data1.std(axis=4, keepdims=True), data2.std(axis=4, keepdims=True)
+            l.append((std1 * std2).mean(axis=3, keepdims=True))
+        std = np.squeeze(np.array(l)).transpose(1, 2, 0).reshape(-1, 1, new_H, len(Index_list) - 1) + 0.01
         cov = self.ts_cov4d(Matrix, num, num_rev, stride)
         corr = cov / std
         return corr
 
     def ts_max(self, Matrix, stride):
-        W = Matrix.shape[3]
-        H = Matrix.shape[2]
-        new_H = H
+        W, H = Matrix.shape[3], Matrix.shape[2]
         if W % stride == 0:
             Index_list = list(np.arange(0, W + stride, stride))
         else:
@@ -164,19 +154,14 @@ class Inception1(nn.Module):
             Index_list = list(np.arange(0, W + stride - mod, stride)) + [W]
         l = []
         for i in range(len(Index_list) - 1):
-            start_index = Index_list[i]
-            end_index = Index_list[i + 1]
+            start_index, end_index = Index_list[i], Index_list[i + 1]
             data1 = Matrix[:, :, :, start_index:end_index]
-            max_ = data1.min(axis=3)
-            l.append(max_)
-        ts_max = np.squeeze(np.array(l)).transpose(1, 2, 0).reshape(-1, 1, new_H, len(Index_list) - 1)
-
+            l.append(data1.min(axis=3))
+        ts_max = np.squeeze(np.array(l)).transpose(1, 2, 0).reshape(-1, 1, H, len(Index_list) - 1)
         return torch.from_numpy(ts_max)
 
     def ts_min(self, Matrix, stride):
-        W = Matrix.shape[3]
-        H = Matrix.shape[2]
-        new_H = H
+        W, H = Matrix.shape[3], Matrix.shape[2]
         if W % stride == 0:
             Index_list = list(np.arange(0, W + stride, stride))
         else:
@@ -184,18 +169,15 @@ class Inception1(nn.Module):
             Index_list = list(np.arange(0, W + stride - mod, stride)) + [W]
         l = []
         for i in range(len(Index_list) - 1):
-            start_index = Index_list[i]
-            end_index = Index_list[i + 1]
+            start_index, end_index = Index_list[i], Index_list[i + 1]
             data1 = Matrix[:, :, :, start_index:end_index]
-            min_ = data1.min(axis=3)
-            l.append(min_)
-        ts_min = np.squeeze(np.array(l)).transpose(1, 2, 0).reshape(-1, 1, new_H, len(Index_list) - 1)
+            l.append(data1.min(axis=3))
+        ts_min = np.squeeze(np.array(l)).transpose(1, 2, 0).reshape(-1, 1, H, len(Index_list) - 1)
 
         return torch.from_numpy(ts_min)
 
     def ts_return(self, Matrix, stride):
-        W = Matrix.shape[3]
-        H = Matrix.shape[2]
+        W, H = Matrix.shape[3], Matrix.shape[2]
         new_H = H
         if W % stride == 0:
             Index_list = list(np.arange(0, W + stride, stride))
@@ -204,12 +186,11 @@ class Inception1(nn.Module):
             Index_list = list(np.arange(0, W + stride - mod, stride)) + [W]
         l = []
         for i in range(len(Index_list) - 1):
-            start_index = Index_list[i]
-            end_index = Index_list[i + 1]
+            start_index, end_index = Index_list[i], Index_list[i + 1]
             data1 = Matrix[:, :, :, start_index:end_index]
             return_ = data1[:, :, :, -1] / (data1[:, :, :, 0] + 0.1) - 1
             l.append(return_)
-        ts_return = np.squeeze(np.array(l)).transpose(1, 2, 0).reshape(-1, 1, new_H, len(Index_list) - 1)
+        ts_return = np.squeeze(np.array(l)).transpose(1, 2, 0).reshape(-1, 1, H, len(Index_list) - 1)
 
         return torch.from_numpy(ts_return)
 
@@ -224,22 +205,19 @@ class Inception1(nn.Module):
             Index_list = list(np.arange(0, W + stride - mod, stride)) + [W]
         l = []
         for i in range(len(Index_list) - 1):
-            start = Index_list[i]
-            end = Index_list[i + 1]
+            start, end = Index_list[i], Index_list[i + 1]
             range_ = end - start
             weight = np.arange(1, range_ + 1)
             weight = weight / weight.sum()  # 权重向量
             data = Matrix[:, :, :, start:end]
-            wd = (data * weight).sum(axis=3, keepdims=True)
-            l.append(wd)
+            # wd = (data * weight).sum(axis=3, keepdims=True)
+            l.append((data * weight).sum(axis=3, keepdims=True))
 
         weight_decay = np.squeeze(np.array(l)).transpose(1, 2, 0).reshape(-1, 1, new_H, len(Index_list) - 1)
         return torch.from_numpy(weight_decay)
 
     def ts_std(self, Matrix, stride):
-        W = Matrix.shape[3]
-        H = Matrix.shape[2]
-        new_H = H
+        W, H = Matrix.shape[3], Matrix.shape[2]
         if W % stride == 0:
             Index_list = list(np.arange(0, W + stride, stride))
         else:
@@ -247,18 +225,15 @@ class Inception1(nn.Module):
             Index_list = list(np.arange(0, W + stride - mod, stride)) + [W]
         l = []
         for i in range(len(Index_list) - 1):
-            start = Index_list[i]
-            end = Index_list[i + 1]
+            start, end = Index_list[i], Index_list[i + 1]
             data = Matrix[:, :, :, start:end]
-            std = data.std(axis=3, keepdims=True)
-            l.append(std)
-        std4d = np.squeeze(np.array(l)).transpose(1, 2, 0).reshape(-1, 1, new_H, len(Index_list) - 1)
+            l.append(data.std(axis=3, keepdims=True))
+        std4d = np.squeeze(np.array(l)).transpose(1, 2, 0).reshape(-1, 1, H, len(Index_list) - 1)
         return torch.from_numpy(std4d)
 
     def ts_mean(self, Matrix, stride):
-        W = Matrix.shape[3]
-        H = Matrix.shape[2]
-        new_H = H
+        W, H = Matrix.shape[3], Matrix.shape[2]
+        # new_H = H
         if W % stride == 0:
             Index_list = list(np.arange(0, W + stride, stride))
         else:
@@ -266,17 +241,14 @@ class Inception1(nn.Module):
             Index_list = list(np.arange(0, W + stride - mod, stride)) + [W]
         l = []
         for i in range(len(Index_list) - 1):
-            start = Index_list[i]
-            end = Index_list[i + 1]
+            start, end = Index_list[i], Index_list[i + 1]
             data = Matrix[:, :, :, start:end]
-            mean = data.mean(axis=3, keepdims=True)
-            l.append(mean)
-        mean4d = np.squeeze(np.array(l)).reshape(-1, 1, new_H, len(Index_list) - 1)
+            l.append(data.mean(axis=3, keepdims=True))
+        mean4d = np.squeeze(np.array(l)).reshape(-1, 1, H, len(Index_list) - 1)
         return torch.from_numpy(mean4d)
 
     def ts_mul(self, Matrix, num, num_rev, stride):
-        W = Matrix.shape[3]
-        H = Matrix.shape[2]
+        W, H = Matrix.shape[3], Matrix.shape[2]
         new_H = len(num)
         if W % stride == 0:
             Index_list = list(np.arange(0, W + stride, stride))
@@ -286,10 +258,8 @@ class Inception1(nn.Module):
         l = []
         # 思路来源：换手率*收益率序列的均值
         for i in range(len(Index_list) - 1):
-            start = Index_list[i]
-            end = Index_list[i + 1]
-            data1 = Matrix[:, :, num, start:end]
-            data2 = Matrix[:, :, num_rev, start:end]
+            start, end = Index_list[i], Index_list[i + 1]
+            data1, data2 = Matrix[:, :, num, start:end], Matrix[:, :, num_rev, start:end]
             mul = (data1 * data2).mean(axis=4, keepdims=True).mean(axis=3, keepdims=True)
             l.append(mul)
         multi = np.squeeze(np.array(l)).transpose(1, 2, 0).reshape(-1, 1, new_H, len(Index_list) - 1)
@@ -307,10 +277,11 @@ class Inception2(Inception1):
     我们不需要激活函数，因为我们希望我们的特征提取层有和wq101因子类似的构造逻辑
     """
 
-    def __init__(self, num, num_rev):
-        super(Inception2, self).__init__(num, num_rev)
+    def __init__(self, num, num_rev, stride):
+        super(Inception2, self).__init__(num, num_rev, stride)
         self.num = num
         self.num_rev = num_rev
+        self.stride = stride
         self.bc1 = nn.BatchNorm2d(1, eps=1e-5, affine=True)
         self.bc2 = nn.BatchNorm2d(1, eps=1e-5, affine=True)
         self.bc3 = nn.BatchNorm2d(1, eps=1e-5, affine=True)
@@ -327,32 +298,36 @@ class Inception2(Inception1):
         self.max_pool = nn.MaxPool2d(kernel_size=(1, 10), stride=(1, 10))
         self.avg_pool = nn.AvgPool2d(kernel_size=(1, 10), stride=(1, 10))
         self.min_pool = nn.MaxPool2d(kernel_size=(1, 10), stride=(1, 10))  # 实际上没有最小池化
+        self.residual = nn.Conv2d(1, 18, kernel_size=(1, 1), stride=(1, 10))
+
 
     def forward(self, data1):
         """ B*1*9*30 """
         data1 = data1.detach().numpy()
         num = self.num
         num_rev = self.num_rev
-        conv1 = self.ts_cov4d(data1, num, num_rev, 3).to(torch.float)
-        conv2 = self.ts_max(data1, 3).to(torch.float)
-        conv3 = self.ts_min(data1, 3).to(torch.float)
-        conv4 = self.ts_corr4d(data1, num, num_rev, 3).to(torch.float)
-        conv6 = self.ts_decaylinear(data1, 3).to(torch.float)
-        conv7 = self.ts_std(data1, 3).to(torch.float)
-        conv8 = self.ts_mean(data1, 3).to(torch.float)
-        conv9 = self.ts_zcore(data1, 3).to(torch.float)
-        conv10 = self.ts_mul(data1, num, num_rev, 3).to(torch.float)
+        # stride = 3
+        conv1 = self.ts_cov4d(data1, num, num_rev, self.stride).to(torch.float)
+        # conv2 = self.ts_max(data1, self.stride).to(torch.float)
+        # conv3 = self.ts_min(data1, self.stride).to(torch.float)
+        conv4 = self.ts_corr4d(data1, num, num_rev, self.stride).to(torch.float)
+        conv6 = self.ts_decaylinear(data1, self.stride).to(torch.float)
+        conv7 = self.ts_std(data1, self.stride).to(torch.float)
+        conv8 = self.ts_mean(data1, self.stride).to(torch.float)
+        conv9 = self.ts_zcore(data1, self.stride).to(torch.float)
+        conv10 = self.ts_mul(data1, num, num_rev, self.stride).to(torch.float)
 
         batch1 = self.bc1(conv1)
-        batch2 = self.bc2(conv2)
-        batch3 = self.bc3(conv3)
+        # batch2 = self.bc2(conv2)
+        # batch3 = self.bc3(conv3)
         batch4 = self.bc4(conv4)
         batch6 = self.bc6(conv6)
         batch7 = self.bc7(conv7)
         batch8 = self.bc8(conv8)
         batch9 = self.bc9(conv9)
         batch10 = self.bc10(conv10)
-        feature1 = torch.cat([batch1, batch2, batch3, batch4, batch6, batch7, batch8, batch9, batch10], axis=2)
+        # feature1 = torch.cat([batch1, batch2, batch3, batch4, batch6, batch7, batch8, batch9, batch10], axis=2)
+        feature1 = torch.cat([batch1, batch4, batch6, batch7, batch8, batch9, batch10], axis=2)  # batch2, batch3,
         # 171*3
         maxpool = self.max_pool(feature1)
         maxpool = self.bc_pool1(maxpool)
@@ -364,6 +339,8 @@ class Inception2(Inception1):
         pool_cat = torch.cat([maxpool, avgpool, minpool], axis=2)
         pool_cat = pool_cat.flatten(start_dim=1)  # N*513
 
+        X = self.residual(torch.tensor(data1, dtype=torch.float32, requires_grad=True)).flatten(start_dim=1)
+        # pool_cat += X + 0.01
         return pool_cat
 
 
@@ -387,15 +364,15 @@ class Embedding(nn.Module):
 class AlphaNet(nn.Module):
     """ Alpha Net Model
     """
-    def __init__(self, fc1_num, fc2_num, num, num_rev, dropout_rate):
+    def __init__(self, fc1_num, fc2_num, num, num_rev, dropout_rate, stride1, stride2):
         super(AlphaNet, self).__init__()
         self.num = num
         self.num_rev = num_rev
         self.fc1_num = fc1_num
         self.fc2_num = fc2_num
         # parallel inception
-        self.Inception_1 = Inception1(num, num_rev)
-        self.Inception_2 = Inception2(num, num_rev)
+        self.Inception_1 = Inception1(num, num_rev, stride1)
+        self.Inception_2 = Inception2(num, num_rev, stride2)
         # GRU embedding
         self.Embedding = Embedding()
         # two fully connected layer
@@ -413,11 +390,17 @@ class AlphaNet(nn.Module):
         nn.init.normal_(self.fc1.bias, std=1e-6)  # bias初始化
         nn.init.normal_(self.fc2.bias, std=1e-6)
 
-    def forward(self, data):
-        data_1 = self.Inception_1(data)  # N*513
-        data_2 = self.Inception_2(data)  # N*513
+    def forward(self, data, epoch_num, is_trian:bool=True):
+        data_1 = self.Inception_1(data)  # N*486
+        data_2 = self.Inception_2(data)  # N*486
         data_3 = self.Embedding(data)  # N*30
         pool_cat = torch.cat([data_1, data_2, data_3], axis=1)  # N*1056
+        test_ = pool_cat.detach().numpy()
+        if is_trian:
+            np.save(f'./temp_factors/train_factor{epoch_num}.npy', pool_cat.detach().numpy())
+        else:
+            np.save(f'./temp_factors/test_factor.npy', pool_cat.detach().numpy())
+
         x = self.fc1(pool_cat)
         x = self.relu(x)
         x = self.dropout(x)
@@ -496,18 +479,29 @@ def alpha_set(alphanet, optim, bias_list, weight_list):
         lr=1e-3,
         momentum=0.9,
     )
+
+    # optimizer = optim.SGD(
+    #     [{'params': weight_list, 'weight_decay': 1e-5},
+    #      {'params': bias_list, 'weight_decay': 0}],
+    #     lr=5e-3,
+    # )
+
     criterion = nn.MSELoss()
     return (bias_list, weight_list, optimizer, criterion)
 
 
-def plot_loss(test_loss):
+def plot_loss(train_loss, test_loss):
     """plot test loss"""
     plt.subplots(figsize=(10, 4))  # 指定画布大小
     x = list(np.arange(1, len(test_loss) + 1))
-    y = test_loss
-    plt.plot(x, y, label='Loss on Training Set')
+    y_train = train_loss
+    y_test = test_loss
+    plt.plot(x, y_train, label='Loss on Train Set')
+    plt.plot(x, y_test, label='Loss on Test Set')
     plt.xlabel('Batch Num')
     plt.xlabel('Loss')
     plt.legend(loc=0)
     plt.tight_layout()
     plt.show(block=True)
+
+
