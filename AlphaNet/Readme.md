@@ -1,4 +1,4 @@
-参考 [股票因子挖掘神经网络构建](https://blog.csdn.net/qq_45137571/article/details/118532260) 构建网络结构；
+
 
 ### 数据来源
 
@@ -19,4 +19,5 @@ wind oracle 数据， 我code运行的数据不是这里上传的
 
 -  [github: AlphaNetV3](https://github.com/Congyuwang/AlphaNetV3), 使用TensorFlow写的，参考了其中的code逻辑，没有运行
 -  [知乎：AlphaNet因子挖掘网络——运算符嵌套和卷积神经网络](https://zhuanlan.zhihu.com/p/546110583)
+-  [cnblogs: 股票因子挖掘神经网络构建](https://blog.csdn.net/qq_45137571/article/details/118532260) 构建网络结构；如果单纯用cpu跑，数据多了就很慢，可以继续优化
 -  [cvxgrp-cvxpylayers](https://www.mianshigee.com/project/cvxgrp-cvxpylayers)
