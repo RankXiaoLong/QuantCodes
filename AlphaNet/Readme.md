@@ -10,6 +10,7 @@ wind oracle 数据， 我code运行的数据不是这里上传的
 
 - `model.py` 为比较原始的版本，可以run
 - `modelV3.py` 为修改的V3 版本，算子有些许问题，使用GPU跑会快很快！
+- `tools.py` 是从 **tushare** 获取数据，由于太慢，有限制，后期弃用。
 
 ### 回测
 
