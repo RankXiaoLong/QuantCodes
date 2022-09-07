@@ -17,4 +17,5 @@ wind oracle 数据
 ### 参考资料
 
 -  [github: AlphaNetV3](https://github.com/Congyuwang/AlphaNetV3), 使用TensorFlow写的，参考了其中的code逻辑，没有运行
+-  [知乎：AlphaNet因子挖掘网络——运算符嵌套和卷积神经网络](https://zhuanlan.zhihu.com/p/546110583)
 -  [cvxgrp-cvxpylayers](https://www.mianshigee.com/project/cvxgrp-cvxpylayers)
