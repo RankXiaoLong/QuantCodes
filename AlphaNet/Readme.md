@@ -11,7 +11,8 @@
 
 - `model.py` 为比较原始的版本，可以run
 - `modelV3.py` 为修改的V3 版本，算子有些许问题，使用GPU跑会快很快！
-- `tools.py` 是从 **tushare** 获取数据，由于太慢，有限制，后期弃用。
+- `tools.py` 是从 **tushare** 获取数据，由于太慢，有限制，后期弃用。 `tools.py`有数据对齐函数，可以将聚宽中的数据格式与wind数据中的**date** 和 **codes** 对齐。
+- `backtools.py` 为回测工具文件，包含单组分层IC测试，再次感谢东哥。
 
 ### 回测
 
