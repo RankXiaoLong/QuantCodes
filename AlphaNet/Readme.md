@@ -17,6 +17,7 @@
 - `tools.py` 是从 **tushare** 获取数据，由于太慢，有限制，后期弃用。 `tools.py`有数据对齐函数，可以将聚宽中的数据格式与wind数据中的**date** 和 **codes** 对齐。
 - `backtools.py` 为回测工具文件，包含单组分层IC测试，再次感谢东哥。
 - `combine_ic.py` 为合成因子IC回测主文件。
+- **data** 文件夹的数据与[2]相同
 
 ### 回测
 
@@ -32,6 +33,9 @@
 ### 参考资料
 
 [1] [github: AlphaNetV3](https://github.com/Congyuwang/AlphaNetV3), 使用TensorFlow写的，参考了其中的code逻辑，没有运行
+
 [2]  [知乎：AlphaNet因子挖掘网络——运算符嵌套和卷积神经网络](https://zhuanlan.zhihu.com/p/546110583)
+
 [3]  [cnblogs: 股票因子挖掘神经网络构建](https://blog.csdn.net/qq_45137571/article/details/118532260) 构建网络结构；如果单纯用cpu跑，数据多了就很慢，可以继续优化
+
 [4]  [cvxgrp-cvxpylayers](https://www.mianshigee.com/project/cvxgrp-cvxpylayers)
